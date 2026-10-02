@@ -1,6 +1,6 @@
 // Older epoch-second values are indistinguishable from ordinary delay seconds, so timestamp compatibility only applies to current-era reset headers.
 const timestampThreshold = Date.parse('2024-01-01');
-const delayPattern = /^\d+$/;
+const delayPattern = /^\d+(?:\.\d+)?$/;
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // HTTP-date parsing is limited to IMF-fixdate and the two obsolete HTTP-date formats. Other date-like strings intentionally fall back to the normal retry delay.
@@ -23,6 +23,12 @@ type RetryTimingDateParts = {
 };
 
 export const getRetryTimingHeader = (headers: Headers): RetryTimingHeader | undefined => {
+	// Discord-style services send the remaining delay in (possibly fractional) seconds.
+	const rateLimitResetAfter = headers.get('X-RateLimit-Reset-After');
+	if (rateLimitResetAfter !== null) {
+		return {value: rateLimitResetAfter, allowTimestamp: true};
+	}
+
 	const retryAfter = headers.get('Retry-After');
 	if (retryAfter !== null) {
 		return {value: retryAfter, allowTimestamp: false};
@@ -56,7 +62,7 @@ const createTimestamp = ({year, month, day, hours, minutes, seconds}: RetryTimin
 	const secondsNumber = Number(seconds);
 	if (
 		monthIndex === -1
-		|| hoursNumber > 23
+		|| hoursNumber > 24
 		|| minutesNumber > 59
 		|| secondsNumber > 60
 	) {
@@ -160,7 +166,7 @@ export const calculateRetryTimingDelay = ({value, allowTimestamp}: RetryTimingHe
 			delay -= Date.now();
 		}
 
-		return Math.max(0, delay);
+		return delay;
 	}
 
 	const timestamp = parseDate(value);
