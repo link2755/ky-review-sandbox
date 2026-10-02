@@ -1,0 +1,1107 @@
+import {Buffer} from 'node:buffer';
+import process from 'node:process';
+import type {IncomingHttpHeaders} from 'node:http';
+import test from 'ava';
+import type {RequestHandler} from 'express';
+import ky, {replaceOption} from '../source/index.js';
+import {createHttpTestServer} from './helpers/create-http-test-server.js';
+
+const timeout = 60_000;
+
+const echoHeaders: RequestHandler = (request, response) => {
+	request.resume();
+	response.end(JSON.stringify(request.headers));
+};
+
+test('frozen header pairs work directly and with inherited defaults', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+	const headers = Object.freeze([
+		Object.freeze(['X-Tag', 'one'] as const),
+		Object.freeze(['x-tag', 'two'] as const),
+		Object.freeze(['X-Value', 'updated'] as const),
+	]);
+	const expectedHeaders = {'x-tag': 'one, two', 'x-value': 'updated'};
+
+	t.like(await ky(server.url, {headers}).json(), expectedHeaders);
+	const parent = ky.create({headers: {'x-default': 'parent', 'x-value': 'original'}});
+	t.like(await parent.extend({headers})(server.url).json(), {...expectedHeaders, 'x-default': 'parent'});
+	t.like(await parent(server.url).json(), {'x-default': 'parent', 'x-value': 'original'});
+});
+
+test.serial('works with nullish headers even in old browsers', async t => {
+	// One `Headers` construction while merging headers, plus the two response assertions.
+	t.plan(3);
+
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const OriginalHeaders = Headers;
+	// Some old browsers throw for new Headers(undefined) or new Headers(null)
+	// so we check that Ky never does that and passes an empty object instead.
+	// See: https://github.com/sindresorhus/ky/issues/260
+	globalThis.Headers = class Headers extends OriginalHeaders {
+		constructor(headersInit?: RequestInit['headers']) {
+			t.deepEqual(headersInit, {});
+			super(headersInit);
+		}
+	};
+	const response = await ky.get(server.url).json<IncomingHttpHeaders>();
+
+	t.is(typeof response, 'object');
+	t.truthy(response);
+
+	globalThis.Headers = OriginalHeaders;
+});
+
+test('`user-agent`', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky.get(server.url).json<IncomingHttpHeaders>();
+	t.is(headers['user-agent'], 'node');
+});
+
+test('`accept-encoding`', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky.get(server.url).json<IncomingHttpHeaders>();
+
+	t.is(headers['accept-encoding'], 'gzip, deflate');
+});
+
+test('does not override provided `accept-encoding`', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky
+		.get(server.url, {
+			headers: {
+				'accept-encoding': 'gzip',
+			},
+		})
+		.json<IncomingHttpHeaders>();
+	t.is(headers['accept-encoding'], 'gzip');
+});
+
+test('does not remove user headers from `url` object argument', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky
+		.get(server.url, {
+			headers: {
+				'X-Request-Id': 'value',
+			},
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.is(headers.accept, 'application/json');
+	t.is(headers['user-agent'], 'node');
+	t.is(headers['accept-encoding'], 'gzip, deflate');
+	t.is(headers['x-request-id'], 'value');
+});
+
+test('`accept` header with `json` option', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	let headers = await ky.get(server.url).json<IncomingHttpHeaders>();
+	t.is(headers.accept, 'application/json');
+
+	headers = await ky
+		.get(server.url, {
+			headers: {
+				accept: '',
+			},
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.is(headers.accept, 'application/json');
+});
+
+test('`host` header', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky.get(server.url).json<IncomingHttpHeaders>();
+	t.is(headers.host, `localhost:${server.port}`);
+});
+
+test('transforms names to lowercase', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky(server.url, {
+		headers: {
+			'ACCEPT-ENCODING': 'identity',
+		},
+	}).json<IncomingHttpHeaders>();
+	t.is(headers['accept-encoding'], 'identity');
+});
+
+test('setting `content-length` to 0', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const request = ky
+		.post(server.url, {
+			headers: {
+				'content-length': '0',
+			},
+			body: 'sup',
+		})
+		.json<IncomingHttpHeaders>();
+
+	const error = await t.throwsAsync(request);
+
+	// The undici TypeError ("fetch failed") is wrapped in NetworkError, so the undici cause is one level deeper
+	t.is(error.cause?.cause?.code, 'UND_ERR_REQ_CONTENT_LENGTH_MISMATCH');
+});
+
+test('sets `content-length` to `0` when requesting PUT with empty body', async t => {
+	const server = await createHttpTestServer(t);
+	server.put('/', echoHeaders);
+
+	const headers = await ky.put(server.url).json<IncomingHttpHeaders>();
+
+	t.is(headers['content-length'], '0');
+});
+
+test('json manual `content-type` header', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const headers = await ky
+		.post(server.url, {
+			headers: {
+				'content-type': 'custom',
+			},
+			json: {
+				foo: true,
+			},
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.is(headers['content-type'], 'custom');
+});
+
+test('json option overrides `content-type` inherited from a Request input body', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const headers = await ky(new Request(server.url, {method: 'POST', body: 'plain'}), {
+		json: {
+			foo: true,
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(headers['content-type'], 'application/json');
+});
+
+test('form-data manual `content-type` header', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const form = new FormData();
+	form.append('a', 'b');
+	const headers = await ky
+		.post(server.url, {
+			headers: {
+				'content-type': 'custom',
+			},
+			// @ts-expect-error FormData type mismatch
+			body: form,
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.is(headers['content-type'], 'custom');
+});
+
+test('form-data automatic `content-type` header', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const form = new FormData();
+	form.append('a', 'b');
+	const headers = await ky
+		.post(server.url, {
+			// @ts-expect-error FormData type mismatch
+			body: form,
+		})
+		.json<IncomingHttpHeaders>();
+
+	// eslint-disable-next-line ava/assertion-arguments
+	t.true(headers['content-type'].startsWith('multipart/form-data; boundary='), headers['content-type']);
+});
+
+test('form-data manual `content-type` header with search params', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const form = new FormData();
+	form.append('a', 'b');
+	const headers = await ky
+		.post(server.url, {
+			searchParams: 'foo=1',
+			headers: {
+				'content-type': 'custom',
+			},
+			// @ts-expect-error FormData type mismatch
+			body: form,
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.is(headers['content-type'], 'custom');
+});
+
+test('form-data automatic `content-type` header with search params', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const form = new FormData();
+	form.append('a', 'b');
+	const headers = await ky
+		.post(server.url, {
+			searchParams: 'foo=1',
+			// @ts-expect-error FormData type mismatch
+			body: form,
+		})
+		.json<IncomingHttpHeaders>();
+
+	// eslint-disable-next-line ava/assertion-arguments
+	t.true(headers['content-type'].startsWith('multipart/form-data; boundary='), headers['content-type']);
+});
+
+test('form-data sets `content-length` header', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const form = new FormData();
+	form.append('a', 'b');
+
+	const headers = await ky.post(server.url, {body: form}).json<IncomingHttpHeaders>();
+
+	// Undici 6.21.3+ added trailing CRLF to FormData (backported from 7.1.0)
+	// Older versions: 119 bytes (without CRLF)
+	// Newer versions: 121 bytes (with CRLF)
+	// Eventually this should only check for '121' when older Node.js versions are dropped
+	t.true(headers['content-length'] === '119' || headers['content-length'] === '121');
+});
+
+test('buffer as `options.body` sets `content-length` header', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const buffer = Buffer.from('unicorn');
+	const headers = await ky
+		.post(server.url, {
+			body: buffer,
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.is(Number(headers['content-length']), buffer.length);
+});
+
+test.failing('removes undefined value headers', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky
+		.get(server.url, {
+			headers: {
+				'user-agent': undefined,
+				unicorn: 'unicorn',
+			},
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.is(headers['user-agent'], 'undefined');
+	t.is(headers['unicorn'], 'unicorn');
+});
+
+test('non-existent headers set to undefined are omitted', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const headers = await ky
+		.get(server.url, {
+			headers: {
+				blah: undefined,
+				rainbow: 'unicorn',
+			},
+		})
+		.json<IncomingHttpHeaders>();
+
+	t.false('blah' in headers);
+	t.true('rainbow' in headers);
+});
+
+test('preserve port in host header if non-standard port', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const body = await ky.get(server.url).json<IncomingHttpHeaders>();
+	t.is(body.host, `localhost:${server.port}`);
+});
+
+test('strip port in host header if explicit standard port (:80) & protocol (HTTP)', async t => {
+	const customFetch: typeof fetch = async () => new Response(
+		JSON.stringify({headers: {Host: 'httpbin.org'}}),
+		{status: 200, headers: {'content-type': 'application/json'}},
+	);
+
+	const body = await ky.get('http://httpbin.org:80/headers', {fetch: customFetch}).json<{headers: IncomingHttpHeaders}>();
+	t.is(body.headers['Host'], 'httpbin.org');
+});
+
+test('strip port in host header if explicit standard port (:443) & protocol (HTTPS)', async t => {
+	const customFetch: typeof fetch = async () => new Response(
+		JSON.stringify({headers: {Host: 'httpbin.org'}}),
+		{status: 200, headers: {'content-type': 'application/json'}},
+	);
+
+	const body = await ky.get('https://httpbin.org:443/headers', {fetch: customFetch}).json<{headers: IncomingHttpHeaders}>();
+	t.is(body.headers['Host'], 'httpbin.org');
+});
+
+test('strip port in host header if implicit standard port & protocol (HTTP)', async t => {
+	const customFetch: typeof fetch = async () => new Response(
+		JSON.stringify({headers: {Host: 'httpbin.org'}}),
+		{status: 200, headers: {'content-type': 'application/json'}},
+	);
+
+	const body = await ky.get('http://httpbin.org/headers', {fetch: customFetch}).json<{headers: IncomingHttpHeaders}>();
+	t.is(body.headers['Host'], 'httpbin.org');
+});
+
+test('strip port in host header if implicit standard port & protocol (HTTPS)', async t => {
+	const customFetch: typeof fetch = async () => new Response(
+		JSON.stringify({headers: {Host: 'httpbin.org'}}),
+		{status: 200, headers: {'content-type': 'application/json'}},
+	);
+
+	const body = await ky.get('https://httpbin.org/headers', {fetch: customFetch}).json<{headers: IncomingHttpHeaders}>();
+	t.is(body.headers['Host'], 'httpbin.org');
+});
+
+test('remove custom header by extending instance (plain objects)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const original = ky.create({
+		headers: {
+			rainbow: 'rainbow',
+			unicorn: 'unicorn',
+		},
+	});
+
+	const extended = original.extend({
+		headers: {
+			rainbow: undefined,
+		},
+	});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.true('unicorn' in response);
+	t.false('rainbow' in response);
+});
+
+test('remove header by extending instance (Headers instance)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const original = ky.create({
+		headers: new Headers({
+			rainbow: 'rainbow',
+			unicorn: 'unicorn',
+		}),
+	});
+
+	const extended = original.extend({
+		// @ts-expect-error Headers does not support undefined values
+		headers: new Headers({
+			rainbow: undefined,
+		}),
+	});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('rainbow' in response);
+	t.true('unicorn' in response);
+});
+
+test('remove header by extending instance (Headers instance and plain object)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const original = ky.create({
+		headers: new Headers({
+			rainbow: 'rainbow',
+			unicorn: 'unicorn',
+		}),
+	});
+
+	const extended = original.extend({
+		headers: {
+			rainbow: undefined,
+		},
+	});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('rainbow' in response);
+	t.true('unicorn' in response);
+});
+
+test('remove header by extending instance (plain object and Headers instance)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const original = ky.create({
+		headers: {
+			rainbow: 'rainbow',
+			unicorn: 'unicorn',
+		},
+	});
+
+	const extended = original.extend({
+		// @ts-expect-error Headers does not support undefined values
+		headers: new Headers({
+			rainbow: undefined,
+		}),
+	});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('rainbow' in response);
+	t.true('unicorn' in response);
+});
+
+test('remove header by extending instance with a differently cased name (plain objects)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const original = ky.create({
+		headers: {
+			'X-Rainbow': 'rainbow',
+			'X-Unicorn': 'unicorn',
+		},
+	});
+
+	const extended = original.extend({
+		headers: {
+			'x-rainbow': undefined,
+		},
+	});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('x-rainbow' in response);
+	t.is(response['x-unicorn'], 'unicorn');
+});
+
+test('override header by extending instance with a differently cased name (plain objects)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const original = ky.create({
+		headers: {
+			'X-Rainbow': 'rainbow',
+		},
+	});
+
+	const extended = original.extend({
+		headers: {
+			'x-rainbow': 'double-rainbow',
+		},
+	});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.is(response['x-rainbow'], 'double-rainbow');
+});
+
+test('last extend wins when the same header is set with mixed cases across multiple extends', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const extended = ky
+		.create({headers: {'X-Rainbow': 'first'}})
+		.extend({headers: {'x-rainbow': 'second'}})
+		.extend({headers: {'X-RAINBOW': 'third'}});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.is(response['x-rainbow'], 'third');
+});
+
+test('header removed with a differently cased name can be re-added by a later extend', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const extended = ky
+		.create({headers: {'X-Rainbow': 'rainbow'}})
+		.extend({headers: {'x-rainbow': undefined}})
+		.extend({headers: {'X-RAINBOW': 'again'}});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.is(response['x-rainbow'], 'again');
+});
+
+test('remove header with a differently cased name in per-request options (plain objects)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({
+		headers: {
+			'X-Rainbow': 'rainbow',
+			'X-Unicorn': 'unicorn',
+		},
+	});
+
+	const response = await instance(server.url, {
+		headers: {
+			'x-rainbow': undefined,
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.false('x-rainbow' in response);
+	t.is(response['x-unicorn'], 'unicorn');
+});
+
+test('override header with a differently cased name in per-request options (plain objects)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({
+		headers: {
+			'X-Rainbow': 'rainbow',
+		},
+	});
+
+	const response = await instance(server.url, {
+		headers: {
+			'x-rainbow': 'double-rainbow',
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['x-rainbow'], 'double-rainbow');
+});
+
+test('remove and override differently cased headers in the same extend (plain objects)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const extended = ky
+		.create({
+			headers: {
+				'X-Rainbow': 'rainbow',
+				'X-Unicorn': 'unicorn',
+				'X-Cat': 'cat',
+			},
+		})
+		.extend({
+			headers: {
+				'x-rainbow': undefined,
+				'x-unicorn': 'double-unicorn',
+			},
+		});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('x-rainbow' in response);
+	t.is(response['x-unicorn'], 'double-unicorn');
+	t.is(response['x-cat'], 'cat');
+});
+
+test('remove header with a differently cased name when extending with a function', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const extended = ky
+		.create({headers: {'X-Rainbow': 'rainbow', 'X-Unicorn': 'unicorn'}})
+		.extend(() => ({headers: {'x-rainbow': undefined}}));
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('x-rainbow' in response);
+	t.is(response['x-unicorn'], 'unicorn');
+});
+
+test('remove header with a differently cased name using a Headers instance over plain object defaults', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const extended = ky
+		.create({headers: {'X-Rainbow': 'rainbow', 'X-Unicorn': 'unicorn'}})
+		.extend({
+			// @ts-expect-error Headers does not support undefined values
+			headers: new Headers({'x-rainbow': undefined}),
+		});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('x-rainbow' in response);
+	t.is(response['x-unicorn'], 'unicorn');
+});
+
+test('init hook receives a single value for a header set with different cases across extends', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	let headerValue: string | undefined;
+
+	const extended = ky
+		.create({headers: {'X-Rainbow': 'rainbow'}})
+		.extend({headers: {'x-rainbow': 'double-rainbow'}})
+		.extend({
+			hooks: {
+				init: [
+					options => {
+						headerValue = new Headers(options.headers as RequestInit['headers']).get('x-rainbow') ?? undefined;
+					},
+				],
+			},
+		});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.is(headerValue, 'double-rainbow');
+	t.is(response['x-rainbow'], 'double-rainbow');
+});
+
+test('init hook sees plain object header names normalized to lowercase', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	let initHeaders: Record<string, string | undefined> | undefined;
+
+	const extended = ky
+		.create({headers: {Authorization: 'token', 'X-Rainbow': 'rainbow'}})
+		.extend({headers: {'x-rainbow': 'double-rainbow'}})
+		.extend({
+			hooks: {
+				init: [
+					options => {
+						initHeaders = {...(options.headers as Record<string, string | undefined>)};
+					},
+				],
+			},
+		});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.deepEqual(initHeaders, {authorization: 'token', 'x-rainbow': 'double-rainbow'});
+	t.is(response.authorization, 'token');
+	t.is(response['x-rainbow'], 'double-rainbow');
+});
+
+test('`replaceOption` headers ignore differently cased defaults', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const extended = ky
+		.create({headers: {'X-Rainbow': 'rainbow', 'X-Unicorn': 'unicorn'}})
+		.extend({headers: replaceOption({'x-unicorn': 'double-unicorn'})});
+
+	const response = await extended(server.url).json<IncomingHttpHeaders>();
+
+	t.false('x-rainbow' in response);
+	t.is(response['x-unicorn'], 'double-unicorn');
+});
+
+test('remove header by setting it to undefined in an init hook (inherited from defaults)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const api = ky.create({
+		headers: {
+			rainbow: 'rainbow',
+			unicorn: 'unicorn',
+		},
+		hooks: {
+			init: [
+				options => {
+					(options.headers as Record<string, string | undefined>)['rainbow'] = undefined;
+				},
+			],
+		},
+	});
+
+	const response = await api(server.url).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('rainbow' in response);
+});
+
+test('remove header by setting it to undefined in an init hook (inherited from a Request input)', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const response = await ky(new Request(server.url, {headers: {rainbow: 'rainbow', unicorn: 'unicorn'}}), {
+		hooks: {
+			init: [
+				options => {
+					options.headers = {rainbow: undefined};
+				},
+			],
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('rainbow' in response);
+});
+
+test('init hook headers object with undefined values only sends defined headers', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const response = await ky(server.url, {
+		hooks: {
+			init: [
+				options => {
+					options.headers = {
+						rainbow: undefined,
+						unicorn: 'unicorn',
+					};
+				},
+			],
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('rainbow' in response);
+});
+
+test('json option sets `content-type` when an init hook removes the header with undefined', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const headers = await ky.post(server.url, {
+		json: {foo: true},
+		hooks: {
+			init: [
+				options => {
+					options.headers = {'content-type': undefined};
+				},
+			],
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(headers['content-type'], 'application/json');
+});
+
+test('remove a `Request` input header by setting it to undefined in the request options', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const response = await ky(new Request(server.url, {headers: {rainbow: 'rainbow', unicorn: 'unicorn'}}), {
+		headers: {rainbow: undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('rainbow' in response);
+});
+
+test('remove a `Request` input header with a differently cased name in the request options', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const response = await ky(new Request(server.url, {headers: {'X-Rainbow': 'rainbow', unicorn: 'unicorn'}}), {
+		headers: {'x-rainbow': undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('x-rainbow' in response);
+});
+
+test('remove a `Request` input header by setting it to undefined in instance defaults', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {rainbow: undefined}});
+	const response = await instance(new Request(server.url, {headers: {rainbow: 'rainbow', unicorn: 'unicorn'}})).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('rainbow' in response);
+});
+
+test('header removal set to undefined survives extending the instance', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {rainbow: undefined}}).extend({headers: {'x-extended': 'yes'}});
+	const response = await instance(new Request(server.url, {headers: {rainbow: 'rainbow'}})).json<IncomingHttpHeaders>();
+
+	t.is(response['x-extended'], 'yes');
+	t.false('rainbow' in response);
+});
+
+test('a header set to undefined in instance defaults can be set again in the request options', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {rainbow: undefined}});
+	const response = await instance(new Request(server.url, {headers: {rainbow: 'rainbow'}}), {
+		headers: {rainbow: 'request'},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['rainbow'], 'request');
+});
+
+test('a header set to undefined in the request options removes the value from instance defaults and a `Request` input', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {rainbow: 'instance', unicorn: 'unicorn'}});
+	const response = await instance(new Request(server.url, {headers: {rainbow: 'request'}}), {
+		headers: {rainbow: undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('rainbow' in response);
+});
+
+test('headers set to undefined in the request options are not visible to `beforeRequest` hooks', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	let hookHeaders: string[] | undefined;
+	await ky(server.url, {
+		headers: {rainbow: undefined, unicorn: 'unicorn'},
+		hooks: {
+			beforeRequest: [
+				({request, options}) => {
+					hookHeaders = [...options.headers.keys(), ...request.headers.keys()];
+				},
+			],
+		},
+	});
+
+	t.false(hookHeaders!.includes('rainbow'));
+	t.true(hookHeaders!.includes('unicorn'));
+});
+
+test('`json` option removes a `content-type` header set to undefined from a `Request` input', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const headers = await ky.post(new Request(server.url, {method: 'POST', body: 'text', headers: {'content-type': 'text/custom'}}), {
+		json: {foo: true},
+		headers: {'content-type': undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(headers['content-type'], 'application/json');
+});
+
+test('remove a `Request` input header with a shortcut method and a plain object', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const response = await ky.post(new Request(server.url, {method: 'POST', body: 'text', headers: {'x-token': 'secret'}}), {
+		headers: {'x-token': undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.false('x-token' in response);
+	t.is(response['content-type'], 'text/plain;charset=UTF-8');
+});
+
+test('remove the automatic `content-type` of a `Request` input body with undefined', async t => {
+	const server = await createHttpTestServer(t);
+	server.post('/', echoHeaders);
+
+	const response = await ky.post(new Request(server.url, {method: 'POST', body: 'text'}), {
+		headers: {'content-type': undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.false('content-type' in response);
+});
+
+test('remove a `Request` input header with the function form of `.extend()`', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {'x-parent': 'parent'}}).extend(parentDefaults => ({
+		headers: {...parentDefaults.headers as Record<string, string>, rainbow: undefined},
+	}));
+	const response = await instance(new Request(server.url, {headers: {rainbow: 'rainbow'}})).json<IncomingHttpHeaders>();
+
+	t.is(response['x-parent'], 'parent');
+	t.false('rainbow' in response);
+});
+
+test('remove a `Request` input header with `replaceOption()` headers containing undefined', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {'x-parent': 'parent'}}).extend({
+		headers: replaceOption({rainbow: undefined, unicorn: 'unicorn'}),
+	});
+	const response = await instance(new Request(server.url, {headers: {rainbow: 'rainbow'}})).json<IncomingHttpHeaders>();
+
+	t.false('x-parent' in response);
+	t.false('rainbow' in response);
+	t.is(response['unicorn'], 'unicorn');
+});
+
+test('an init hook can set a header that was removed with undefined in the request options', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const response = await ky(new Request(server.url, {headers: {rainbow: 'rainbow'}}), {
+		headers: {rainbow: undefined},
+		hooks: {
+			init: [
+				options => {
+					t.is((options.headers as Record<string, string | undefined>)['rainbow'], undefined);
+					t.true('rainbow' in (options.headers as Record<string, string | undefined>));
+					(options.headers as Record<string, string | undefined>)['rainbow'] = 'from-init';
+				},
+			],
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['rainbow'], 'from-init');
+});
+
+test('headers set to undefined in the request options do not affect other requests of the instance', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {rainbow: 'instance'}});
+	const first = await instance(server.url, {headers: {rainbow: undefined}}).json<IncomingHttpHeaders>();
+	const second = await instance(server.url).json<IncomingHttpHeaders>();
+
+	t.false('rainbow' in first);
+	t.is(second['rainbow'], 'instance');
+});
+
+test('remove a `Request` input header with undefined when instance defaults are a `Headers` instance', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: new Headers({'x-instance': '1'})});
+	const response = await instance(new Request(server.url, {headers: {'x-token': 'secret'}}), {
+		headers: {'x-token': undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['x-instance'], '1');
+	t.false('x-token' in response);
+});
+
+test('remove a `Request` input header with undefined when instance defaults are an array of pairs', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: [['x-instance', '1']]});
+	const response = await instance(new Request(server.url, {headers: {'x-token': 'secret'}}), {
+		headers: {'x-token': undefined},
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['x-instance'], '1');
+	t.false('x-token' in response);
+});
+
+test('remove a `Request` input header with a `Headers` instance holding the string "undefined"', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const response = await ky(new Request(server.url, {headers: {'x-token': 'secret', unicorn: 'unicorn'}}), {
+		// @ts-expect-error Headers does not support undefined values
+		headers: new Headers({'x-token': undefined}),
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['unicorn'], 'unicorn');
+	t.false('x-token' in response);
+});
+
+test('remove a `Request` input header with undefined when the request headers are a `Headers` instance', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	const instance = ky.create({headers: {'x-token': undefined}});
+	const response = await instance(new Request(server.url, {headers: {'x-token': 'secret'}}), {
+		headers: new Headers({'x-request': '1'}),
+	}).json<IncomingHttpHeaders>();
+
+	t.is(response['x-request'], '1');
+	t.false('x-token' in response);
+});
+
+test('`init` hooks receive plain object headers even when a `Headers` instance was passed', async t => {
+	const server = await createHttpTestServer(t);
+	server.get('/', echoHeaders);
+
+	let initHeaders: unknown;
+	const response = await ky(server.url, {
+		headers: new Headers({'X-Rainbow': 'rainbow'}),
+		hooks: {
+			init: [
+				options => {
+					initHeaders = options.headers;
+				},
+			],
+		},
+	}).json<IncomingHttpHeaders>();
+
+	t.deepEqual(initHeaders, {'x-rainbow': 'rainbow'});
+	t.is(response['x-rainbow'], 'rainbow');
+});
+
+test('a `Request` input header with the literal string "undefined" is sent as-is', async t => {
+	let sentHeaders: string[][] | undefined;
+
+	await ky(new Request('https://example.com', {headers: {'x-a': 'undefined', 'x-b': '1'}}), {
+		async fetch(request) {
+			sentHeaders = [...(request as Request).headers];
+			return new Response('ok');
+		},
+	});
+
+	t.deepEqual(sentHeaders, [['x-a', 'undefined'], ['x-b', '1']]);
+});
+
+test('duplicate `set-cookie` headers on a `Request` input are all sent', async t => {
+	let sentHeaders: string[][] | undefined;
+	const request = new Request('https://example.com');
+	request.headers.append('set-cookie', 'a=1');
+	request.headers.append('set-cookie', 'b=2');
+
+	await ky(request, {
+		async fetch(request) {
+			sentHeaders = [...(request as Request).headers];
+			return new Response('ok');
+		},
+	});
+
+	t.deepEqual(sentHeaders, [['set-cookie', 'a=1'], ['set-cookie', 'b=2']]);
+});
+
+test('`.extend()` callbacks receive plain object headers even when a `Headers` instance was passed', t => {
+	let parentHeaders: unknown;
+	ky.create({headers: new Headers({'X-Rainbow': 'rainbow'})}).extend(parentDefaults => {
+		parentHeaders = parentDefaults.headers;
+		return {};
+	});
+
+	t.deepEqual(parentHeaders, {'x-rainbow': 'rainbow'});
+});
+
+for (const replaceHeaders of [false, true]) {
+	test(`clearing inherited headers with ${replaceHeaders ? 'replaceOption(undefined)' : 'undefined'} preserves Request input headers`, async t => {
+		const api = ky.create({
+			headers: {'x-default': 'parent'},
+			fetch: async request => new Response(JSON.stringify(Object.fromEntries(request.headers))),
+		});
+		// eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- replaceOption(undefined) returns a replacement marker at runtime.
+		const cleared = api.extend({headers: replaceHeaders ? replaceOption(undefined) : undefined});
+		const request = new Request('https://example.com', {headers: {'x-input': 'kept'}});
+
+		t.deepEqual(await cleared(request).json(), {'x-input': 'kept', accept: 'application/json'});
+		t.deepEqual(await api(request).json(), {'x-default': 'parent', 'x-input': 'kept', accept: 'application/json'});
+	});
+}
