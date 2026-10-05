@@ -5490,7 +5490,7 @@ test('init hooks run before beforeRequest hooks', async t => {
 	t.deepEqual(order, ['init', 'beforeRequest']);
 });
 
-test('init hook can modify timeout', async t => {
+test.serial('init hook can modify timeout', async t => {
 	await t.throwsAsync(
 		ky.get('https://example.com', {
 			async fetch() {
