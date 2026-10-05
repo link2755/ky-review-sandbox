@@ -2309,43 +2309,36 @@ test('respect custom retry.delay', async t => {
 	t.is(requestCount, 5);
 });
 
-test('jitter: true applies full jitter to delay', async t => {
-	const retryCount = 3;
+test.serial('jitter: true applies full jitter to delay', async t => {
 	let requestCount = 0;
-	const delays: number[] = [];
-	let lastTime = Date.now();
+	const originalRandom = Math.random;
+	Math.random = () => 0.5;
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		const now = Date.now();
-		if (requestCount > 0) {
-			delays.push(now - lastTime);
-		}
+	try {
+		await withCapturedTimeouts(async scheduledDelays => {
+			const result = await ky('https://example.com', {
+				timeout: false,
+				async fetch() {
+					requestCount++;
+					return requestCount === 4
+						? new Response(fixture)
+						: new Response('error', {status: 500});
+				},
+				retry: {
+					limit: 3,
+					jitter: true,
+				},
+			}).text();
 
-		lastTime = now;
-		requestCount++;
-
-		if (requestCount === retryCount + 1) {
-			response.end(fixture);
-		} else {
-			response.sendStatus(500);
-		}
-	});
-
-	await ky(server.url, {
-		retry: {
-			limit: retryCount,
-			jitter: true,
-		},
-	}).text();
+			t.is(result, fixture);
+			// HTTPError body reads schedule a separate 10-second deadline.
+			t.deepEqual(scheduledDelays.filter(delayMs => delayMs !== 10_000), [150, 300, 600]);
+		});
+	} finally {
+		Math.random = originalRandom;
+	}
 
 	t.is(requestCount, 4);
-
-	// Full jitter should produce delays between 0 and the computed delay
-	// Add 50% tolerance for system overhead and CI variability
-	t.true(delays[0] >= 0 && delays[0] <= 450);
-	t.true(delays[1] >= 0 && delays[1] <= 900);
-	t.true(delays[2] >= 0 && delays[2] <= 1800);
 });
 
 test('jitter: custom function applies custom jitter', async t => {
