@@ -22,3 +22,12 @@ test('an async afterResponse replacement becomes the returned body', async t => 
 	}).text();
 	t.is(result, 'transformed');
 });
+
+test('beforeError replacement reaches the caller', async t => {
+	const replacement = new Error('enriched error');
+	await t.throwsAsync(ky('https://example.invalid', {
+		retry: 0,
+		fetch: async () => new Response('unavailable', {status: 503}),
+		hooks: {beforeError: [async () => replacement]},
+	}), {is: replacement});
+});
