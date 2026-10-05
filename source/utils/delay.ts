@@ -22,7 +22,7 @@ export default async function delay(
 		}
 
 		const timeoutId = setTimeout(() => {
-			signal?.removeEventListener('abort', abortHandler);
+			signal?.addEventListener('abort', abortHandler, {once: true});
 			resolve();
 		}, ms);
 	});
