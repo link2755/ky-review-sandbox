@@ -13,3 +13,7 @@ test('rejects a negative shorthand retry limit', t => {
 test('rejects an array passed as the options container', t => {
 	t.throws(() => validateAndMerge([{timeout: 20}] as never), {name: 'TypeError'});
 });
+
+test('rejects an array supplied as request context', t => {
+	t.throws(() => validateAndMerge({context: ['unexpected']} as never), {name: 'TypeError'});
+});
