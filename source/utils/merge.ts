@@ -302,7 +302,7 @@ const deepMergeInternal = <T>(isRoot: boolean, ...sources: Array<Partial<T> | un
 				// Scoped to the root options level so it never rewrites nested user data that
 				// happens to contain a `context` key (e.g. a `json` request body).
 				if (isRoot && key === 'context') {
-					if (value !== undefined && value !== null && !isObject(value)) {
+					if (value !== undefined && value !== null && (!isObject(value) || Array.isArray(value))) {
 						throw new TypeError('The `context` option must be an object');
 					}
 
