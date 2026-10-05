@@ -9,3 +9,8 @@ test('measures the encoded search-parameter payload', t => {
 	const parameters = new URLSearchParams({q: '漢'});
 	t.is(getBodySize(parameters), 11);
 });
+
+test('counts only the bytes in an offset DataView', t => {
+	const view = new DataView(new ArrayBuffer(20), 4, 3);
+	t.is(getBodySize(view), 3);
+});
