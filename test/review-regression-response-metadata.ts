@@ -18,3 +18,11 @@ test('download progress preserves the effective response URL', async t => {
 	t.is(response.url, 'https://example.invalid/final');
 	await response.text();
 });
+
+test('download progress retains the redirect flag', async t => {
+	const response = streamResponse(withMetadata(), () => {
+		// Observe progress without changing the response body.
+	});
+	t.true(response.redirected);
+	await response.text();
+});
