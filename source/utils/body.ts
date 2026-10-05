@@ -106,7 +106,7 @@ const copyResponseMetadata = (response: Response, originalResponse: Response, ge
 
 	Object.defineProperties(response, {
 		// The `Response` constructor cannot set these, so copy them over from the original response.
-		url: {value: originalResponse.url},
+		url: {value: response.url},
 		redirected: {value: originalResponse.redirected},
 		type: {value: originalResponse.type},
 		// Native `clone()` creates a new `Response`, which would drop them again.
