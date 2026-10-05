@@ -1107,7 +1107,7 @@ test.serial('timeout option is cancelled when a shortcut body read is resolved',
 	t.true(didClearBodyTimeout);
 });
 
-test('timeout bounds a never-ending successful response body', async t => {
+test.serial('timeout bounds a never-ending successful response body', async t => {
 	let didStartBodyRead = false;
 
 	const customFetch: typeof fetch = async () => {
@@ -1139,7 +1139,7 @@ test('timeout bounds a never-ending successful response body', async t => {
 	t.true(Date.now() - start < 2000);
 });
 
-test('totalTimeout bounds a never-ending successful response body', async t => {
+test.serial('totalTimeout bounds a never-ending successful response body', async t => {
 	let didStartBodyRead = false;
 
 	const customFetch: typeof fetch = async () => {
@@ -1291,7 +1291,7 @@ test.serial('beforeError hook receives totalTimeout exhausted before a shortcut 
 	t.true(hookError instanceof TimeoutError);
 });
 
-test('timeout aborts a never-ending successful response body read', async t => {
+test.serial('timeout aborts a never-ending successful response body read', async t => {
 	let didAbort = false;
 	const customFetch: typeof fetch = async request => {
 		request.signal.addEventListener('abort', () => {
@@ -1317,7 +1317,7 @@ test('timeout aborts a never-ending successful response body read', async t => {
 	t.true(didAbort);
 });
 
-test('timeout does not retry a never-ending successful response body read', async t => {
+test.serial('timeout does not retry a never-ending successful response body read', async t => {
 	let requestCount = 0;
 	const customFetch: typeof fetch = async () => {
 		requestCount++;
@@ -1346,7 +1346,7 @@ test('timeout does not retry a never-ending successful response body read', asyn
 	t.is(requestCount, 1);
 });
 
-test('beforeError hook receives successful response body TimeoutError', async t => {
+test.serial('beforeError hook receives successful response body TimeoutError', async t => {
 	let hookError: Error | undefined;
 	const customFetch: typeof fetch = async () => {
 		const body = new ReadableStream<Uint8Array>({
@@ -2321,7 +2321,7 @@ test('throwHttpErrors option with POST', async t => {
 	await t.notThrowsAsync(ky.post(server.url, {throwHttpErrors: false}).text());
 });
 
-test('throwHttpErrors:false does not suppress timeout errors', async t => {
+test.serial('throwHttpErrors:false does not suppress timeout errors', async t => {
 	let requestCount = 0;
 
 	const server = await createHttpTestServer(t);
