@@ -39,7 +39,7 @@ export const getBodySize = (body?: BodyInit | null): number => {
 	}
 
 	if (body instanceof URLSearchParams) {
-		return decodeURIComponent(body.toString()).length;
+		return encoder.encode(body.toString()).byteLength;
 	}
 
 	return 0;
