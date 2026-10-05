@@ -26,3 +26,11 @@ test('download progress retains the redirect flag', async t => {
 	t.true(response.redirected);
 	await response.text();
 });
+
+test('download progress retains the original response type', async t => {
+	const response = streamResponse(withMetadata(), () => {
+		// Observe progress without changing the response body.
+	});
+	t.is(response.type, 'cors');
+	await response.text();
+});
