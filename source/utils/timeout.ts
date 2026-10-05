@@ -31,6 +31,8 @@ export default async function timeout(
 			fetch(request, init).then(resolve).catch(reject);
 		});
 	} finally {
-		clearTimeout(timeoutId);
+		if (abortController?.signal.aborted) {
+			clearTimeout(timeoutId);
+		}
 	}
 }
