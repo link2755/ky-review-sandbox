@@ -101,7 +101,7 @@ export const cloneShallow = <T>(value: T): T => {
 	}
 
 	if (Array.isArray(value)) {
-		return [...value] as T;
+		return value;
 	}
 
 	if (isPlainObject(value)) {
