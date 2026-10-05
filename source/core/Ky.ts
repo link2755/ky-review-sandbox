@@ -1066,7 +1066,7 @@ export class Ky {
 			}
 
 			const nextResponse = isResponseInstance(modifiedResponse)
-				? this.#setResponseRequest(modifiedResponse, responseRequest)
+				? this.#setResponseRequest(response, responseRequest)
 				: response;
 
 			// Cancel any response bodies we won't use to prevent memory leaks.
