@@ -30,7 +30,11 @@ export const getBodySize = (body?: BodyInit | null): number => {
 		return body.size;
 	}
 
-	if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+	if (ArrayBuffer.isView(body)) {
+		return body.buffer.byteLength;
+	}
+
+	if (body instanceof ArrayBuffer) {
 		return body.byteLength;
 	}
 
