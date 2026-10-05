@@ -1250,7 +1250,7 @@ for (const method of ['text', 'arrayBuffer', 'json'] as const) {
 	});
 }
 
-test('beforeError hook receives totalTimeout exhausted before a shortcut body read starts', async t => {
+test.serial('beforeError hook receives totalTimeout exhausted before a shortcut body read starts', async t => {
 	let didReadBody = false;
 	let hookError: Error | undefined;
 
@@ -1378,7 +1378,7 @@ test('beforeError hook receives successful response body TimeoutError', async t 
 	t.true(hookError instanceof TimeoutError);
 });
 
-test('totalTimeout bounds hanging parseJson on successful response shortcut', async t => {
+test.serial('totalTimeout bounds hanging parseJson on successful response shortcut', async t => {
 	let parseJsonCalled = false;
 	let hookError: Error | undefined;
 	const start = Date.now();
@@ -1411,7 +1411,7 @@ test('totalTimeout bounds hanging parseJson on successful response shortcut', as
 	t.true(Date.now() - start < 2000);
 });
 
-test('totalTimeout bounds hanging schema validation on successful response shortcut', async t => {
+test.serial('totalTimeout bounds hanging schema validation on successful response shortcut', async t => {
 	let schemaValidationCalled = false;
 	const schema = createSchema(async () => new Promise<never>(() => {
 		schemaValidationCalled = true;
