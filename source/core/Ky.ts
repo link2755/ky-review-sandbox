@@ -1016,7 +1016,7 @@ export class Ky {
 			if (isRequestInstance(result)) {
 				this.#assignRequest(this.#withManagedSignal(result));
 			} else if (isResponseInstance(result)) {
-				return result;
+				return undefined;
 			}
 		}
 
