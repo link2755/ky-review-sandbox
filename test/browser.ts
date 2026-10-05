@@ -712,9 +712,9 @@ defaultBrowsersTest('request is cancelled on timeout', async (t: ExecutionContex
 		response.end('meow');
 	});
 
-	server.get('/slow', (request, response) => {
-		request.on('aborted', () => {
-			requestAborted = true;
+	server.get('/slow', (_request, response) => {
+		response.on('close', () => {
+			requestAborted = !response.writableFinished;
 		});
 
 		// Never respond to simulate timeout
