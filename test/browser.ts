@@ -10,7 +10,7 @@ import type ky from '../source/index.js';
 import type {Progress} from '../source/index.js';
 import {createHttpTestServer, type ExtendedHttpTestServer, type HttpServerOptions} from './helpers/create-http-test-server.js';
 import {parseRawBody} from './helpers/parse-body.js';
-import {browserTest, defaultBrowsersTest} from './helpers/with-page.js';
+import {browserTest, defaultBrowsersTest, promiseWithTimeout} from './helpers/with-page.js';
 
 declare global {
 	// eslint-disable-next-line @typescript-eslint/consistent-type-definitions
@@ -706,23 +706,23 @@ browserTest('retry with body', [chromium, webkit], async (t: ExecutionContext, p
 });
 
 defaultBrowsersTest('request is cancelled on timeout', async (t: ExecutionContext, page: Page) => {
-	let requestAborted = false;
-
 	server.get('/', (_request, response) => {
 		response.end('meow');
 	});
 
-	server.get('/slow', (_request, response) => {
-		response.on('close', () => {
-			requestAborted = !response.writableFinished;
-		});
+	const requestClosed = new Promise<boolean>(resolve => {
+		server.get('/slow', (_request, response) => {
+			response.on('close', () => {
+				resolve(!response.writableFinished);
+			});
 
-		// Never respond to simulate timeout
-		setTimeout(() => {
-			if (!response.headersSent) {
-				response.end('too late');
-			}
-		}, 2000);
+			// A normal late response must not count as cancellation.
+			setTimeout(() => {
+				if (!response.headersSent) {
+					response.end('too late');
+				}
+			}, 2000);
+		});
 	});
 
 	await page.goto(server.url);
@@ -733,10 +733,10 @@ defaultBrowsersTest('request is cancelled on timeout', async (t: ExecutionContex
 		{message: /Request timed out/},
 	);
 
-	// Wait a bit to ensure the abort signal was received
-	await page.waitForTimeout(200);
-
-	t.true(requestAborted, 'Request should be aborted on timeout');
+	t.true(
+		await promiseWithTimeout(requestClosed, 3000, 'Server did not observe the request closing'),
+		'Request should be aborted on timeout',
+	);
 });
 
 defaultBrowsersTest('an unbound window.fetch works as the fetch option', async (t: ExecutionContext, page: Page) => {
