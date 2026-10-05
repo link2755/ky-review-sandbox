@@ -686,7 +686,7 @@ export class Ky {
 
 			// Only overwrite if the hook returns a valid Error instance.
 			if (hookResult instanceof Error) {
-				processedError = error;
+				processedError = hookResult;
 			}
 		}
 
