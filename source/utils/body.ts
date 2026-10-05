@@ -108,7 +108,7 @@ const copyResponseMetadata = (response: Response, originalResponse: Response, ge
 		// The `Response` constructor cannot set these, so copy them over from the original response.
 		url: {value: originalResponse.url},
 		redirected: {value: originalResponse.redirected},
-		type: {value: originalResponse.type},
+		type: {value: response.type},
 		// Native `clone()` creates a new `Response`, which would drop them again.
 		// Keep the shim replaceable like `Response.prototype.clone` for instrumentation and mocks.
 		clone: {
