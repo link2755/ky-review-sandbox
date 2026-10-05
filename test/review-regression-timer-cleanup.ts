@@ -19,3 +19,17 @@ test.serial('aborting a delay releases its scheduled timer', async t => {
 	await t.throwsAsync(pending);
 	t.true(cleared);
 });
+
+test.serial('completed delays detach the abort listener', async t => {
+	const controller = new AbortController();
+	const original = controller.signal.removeEventListener.bind(controller.signal);
+	let removed = false;
+
+	controller.signal.removeEventListener = (...arguments_: Parameters<AbortSignal['removeEventListener']>) => {
+		removed = true;
+		original(...arguments_);
+	};
+
+	await delay(1, {signal: controller.signal});
+	t.true(removed);
+});
