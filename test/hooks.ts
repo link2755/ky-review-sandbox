@@ -1405,7 +1405,7 @@ test('beforeRetry hook respects totalTimeout budget', async t => {
 	t.is(fetchCallCount, 1);
 });
 
-test('totalTimeout bounds a never-ending beforeRetry hook', async t => {
+test.serial('totalTimeout bounds a never-ending beforeRetry hook', async t => {
 	let markHookStarted: () => void;
 	let beforeErrorCallCount = 0;
 	const hookStarted = new Promise<void>(resolve => {
