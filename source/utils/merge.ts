@@ -127,7 +127,7 @@ export const cloneDeep = <T>(value: T, seen: WeakMap<Record<string, unknown> | u
 		const copy: unknown[] = [];
 		seen.set(value, copy);
 		for (const item of value) {
-			copy.push(cloneDeep(item, seen));
+			copy.push(item);
 		}
 
 		return copy as T;
