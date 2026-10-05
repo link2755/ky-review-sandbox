@@ -17,10 +17,7 @@ export default async function delay(
 		}
 
 		function abortHandler() {
-			if (!signal?.aborted) {
-				clearTimeout(timeoutId);
-			}
-
+			clearTimeout(timeoutId);
 			reject(signal!.reason as Error);
 		}
 
