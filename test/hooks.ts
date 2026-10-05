@@ -284,7 +284,7 @@ test('beforeRequest hook accepts Request-like object tagged as Request', async t
 	t.is(responseText, 'yes');
 });
 
-test('beforeRequest hook returning a Request-like object still retries after a timeout', async t => {
+test.serial('beforeRequest hook returning a Request-like object still retries after a timeout', async t => {
 	let attempts = 0;
 	const neverSettlingPromise = new Promise<never>(() => {
 		void 0;
@@ -309,7 +309,7 @@ test('beforeRequest hook returning a Request-like object still retries after a t
 	t.is(attempts, 2);
 });
 
-test('beforeRetry hook returning a Request-like object still retries after a later timeout', async t => {
+test.serial('beforeRetry hook returning a Request-like object still retries after a later timeout', async t => {
 	let attempts = 0;
 	const neverSettlingPromise = new Promise<never>(() => {
 		void 0;
@@ -879,7 +879,7 @@ test('beforeRetry hook is never called for the initial request', async t => {
 	);
 });
 
-test('beforeRequest hook on initial request cannot bypass totalTimeout budget', async t => {
+test.serial('beforeRequest hook on initial request cannot bypass totalTimeout budget', async t => {
 	let fetchCallCount = 0;
 
 	const customFetch: typeof fetch = async () => {
@@ -908,7 +908,7 @@ test('beforeRequest hook on initial request cannot bypass totalTimeout budget', 
 	t.is(fetchCallCount, 0);
 });
 
-test('totalTimeout bounds a never-ending beforeRequest hook', async t => {
+test.serial('totalTimeout bounds a never-ending beforeRequest hook', async t => {
 	let markHookStarted: () => void;
 	const hookStarted = new Promise<void>(resolve => {
 		markHookStarted = resolve;
@@ -975,7 +975,7 @@ test.serial('totalTimeout rejects a hook result produced after the deadline', as
 	t.true(didCancelBody);
 });
 
-test('totalTimeout cancels a hook response produced after the timer wins', async t => {
+test.serial('totalTimeout cancels a hook response produced after the timer wins', async t => {
 	let resolveHook: (response: Response) => void;
 	let didCancelBody = false;
 	let markHookStarted: () => void;
@@ -1035,7 +1035,7 @@ test.serial('totalTimeout takes precedence over a hook error produced after the 
 	);
 });
 
-test('totalTimeout bounds a never-ending afterResponse hook', async t => {
+test.serial('totalTimeout bounds a never-ending afterResponse hook', async t => {
 	let markHookStarted: () => void;
 	let didAbort = false;
 	const hookStarted = new Promise<void>(resolve => {
@@ -1599,7 +1599,7 @@ test('beforeError is not called when beforeRetry throws non-Error', async t => {
 	t.false(beforeErrorHookCalled);
 });
 
-test('hooks receive a fresh signal when retrying after a timeout', async t => {
+test.serial('hooks receive a fresh signal when retrying after a timeout', async t => {
 	let requestCount = 0;
 	const observedAbortStates: boolean[] = [];
 
@@ -1641,7 +1641,7 @@ test('hooks receive a fresh signal when retrying after a timeout', async t => {
 	t.deepEqual(observedAbortStates, [false, false, false, false]);
 });
 
-test('beforeError receives a fresh signal when a retry after a timeout fails', async t => {
+test.serial('beforeError receives a fresh signal when a retry after a timeout fails', async t => {
 	let requestCount = 0;
 	let observedAbortState: boolean | undefined;
 
@@ -2162,7 +2162,7 @@ test('beforeError hook receives retryCount in state parameter', async t => {
 	t.is(requestCount, 3);
 });
 
-test('beforeError hook receives TimeoutError', async t => {
+test.serial('beforeError hook receives TimeoutError', async t => {
 	let receivedError: Error | undefined;
 
 	await t.throwsAsync(
@@ -2194,7 +2194,7 @@ test('beforeError hook receives TimeoutError', async t => {
 	t.true(receivedError instanceof KyError);
 });
 
-test('beforeError receives TimeoutError when beforeRequest consumes remaining totalTimeout budget (gh-508)', async t => {
+test.serial('beforeError receives TimeoutError when beforeRequest consumes remaining totalTimeout budget (gh-508)', async t => {
 	let receivedError: Error | undefined;
 	let fetchCallCount = 0;
 
@@ -2231,7 +2231,7 @@ test('beforeError receives TimeoutError when beforeRequest consumes remaining to
 	t.is(fetchCallCount, 0);
 });
 
-test('beforeError hook can modify TimeoutError', async t => {
+test.serial('beforeError hook can modify TimeoutError', async t => {
 	await t.throwsAsync(
 		ky('https://example.com', {
 			timeout: 1,
@@ -2314,7 +2314,7 @@ test('beforeError hook retryCount reflects actual retry count for network errors
 	t.is(errorRetryCount, 2);
 });
 
-test('beforeError hook retryCount reflects actual retry count for TimeoutError', async t => {
+test.serial('beforeError hook retryCount reflects actual retry count for TimeoutError', async t => {
 	let errorRetryCount: number | undefined;
 
 	await t.throwsAsync(
@@ -2656,7 +2656,7 @@ test('beforeError receives request and options for NetworkError', async t => {
 	t.is(receivedOptions?.method, 'GET');
 });
 
-test('beforeError receives request and options for TimeoutError', async t => {
+test.serial('beforeError receives request and options for TimeoutError', async t => {
 	let receivedRequest: Request | undefined;
 	let receivedOptions: NormalizedOptions | undefined;
 
@@ -2899,7 +2899,7 @@ test('beforeRequest hook returning a new Request still honors the user abort sig
 	t.is(error.name, 'AbortError');
 });
 
-test('beforeRequest hook returning a new Request still aborts the fetch on timeout', async t => {
+test.serial('beforeRequest hook returning a new Request still aborts the fetch on timeout', async t => {
 	let didAbort = false;
 
 	await t.throwsAsync(ky('https://example.com', {
@@ -2924,7 +2924,7 @@ test('beforeRequest hook returning a new Request still aborts the fetch on timeo
 	t.true(didAbort);
 });
 
-test('beforeRequest hook returning a new Request still aborts a never-ending body read on timeout', async t => {
+test.serial('beforeRequest hook returning a new Request still aborts a never-ending body read on timeout', async t => {
 	let didAbort = false;
 
 	await t.throwsAsync(ky('https://example.com', {
@@ -3130,7 +3130,7 @@ test('beforeRetry hook returning a new Request still honors the user abort signa
 	t.is(requestCount, 2);
 });
 
-test('beforeRetry hook returning a new Request still aborts the retried fetch on timeout', async t => {
+test.serial('beforeRetry hook returning a new Request still aborts the retried fetch on timeout', async t => {
 	let requestCount = 0;
 	let didAbort = false;
 
