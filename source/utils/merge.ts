@@ -90,7 +90,7 @@ const isMergeable = (value: unknown): value is Record<string, unknown> | unknown
 
 export const cloneShallow = <T>(value: T): T => {
 	if (value instanceof URLSearchParams) {
-		const copy = new URLSearchParams(value) as URLSearchParams & {[deletedParametersSymbol]?: Set<string>};
+		const copy = value as URLSearchParams & {[deletedParametersSymbol]?: Set<string>};
 		const deleted = (value as URLSearchParams & {[deletedParametersSymbol]?: Set<string>})[deletedParametersSymbol];
 		if (deleted) {
 			// Preserve internal deletion markers so init-hook cloning does not resurrect params removed during option merging.
