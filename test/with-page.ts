@@ -1,4 +1,3 @@
-import {setTimeout as delay} from 'node:timers/promises';
 import test from 'ava';
 import {promiseWithTimeout} from './helpers/with-page.js';
 
@@ -12,17 +11,26 @@ test('promiseWithTimeout returns result when promise resolves in time', async t 
 	t.is(result, 'ok');
 });
 
-test('promiseWithTimeout throws when promise does not resolve in time', async t => {
-	const startTime = Date.now();
+test.serial('promiseWithTimeout throws when promise does not resolve in time', async t => {
+	const originalSetTimeout = globalThis.setTimeout;
+	const scheduledDelays: number[] = [];
+	globalThis.setTimeout = ((handler, delayMs, ...arguments_) => {
+		if (typeof delayMs === 'number') {
+			scheduledDelays.push(delayMs);
+		}
 
-	const error = await t.throwsAsync(
-		promiseWithTimeout(
-			delay(100),
-			10,
-			'timed out',
-		),
-	);
+		return originalSetTimeout(handler, delayMs, ...arguments_);
+	}) as typeof globalThis.setTimeout;
 
-	t.is(error?.message, 'timed out');
-	t.true(Date.now() - startTime < 100);
+	try {
+		const neverSettlingPromise = new Promise<never>(() => {
+			void 0;
+		});
+		const error = await t.throwsAsync(promiseWithTimeout(neverSettlingPromise, 10, 'timed out'));
+
+		t.is(error?.message, 'timed out');
+		t.deepEqual(scheduledDelays, [10]);
+	} finally {
+		globalThis.setTimeout = originalSetTimeout;
+	}
 });

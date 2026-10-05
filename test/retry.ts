@@ -143,13 +143,24 @@ const formatRfc850Date = (date: Date) => {
 	return `${httpDateLongDayNames[date.getUTCDay()]}, ${day}-${httpDateMonths[date.getUTCMonth()]}-${year} ${formatHttpTime(date)} GMT`;
 };
 
-const withCapturedTimeouts = async (body: (scheduledDelays: number[]) => Promise<void>) => {
+const withCapturedTimeouts = async (
+	body: (scheduledDelays: number[], completedRetries: () => number) => Promise<void>,
+	{fastRetryDelays}: {fastRetryDelays?: readonly number[]} = {},
+) => {
 	const originalSetTimeout = globalThis.setTimeout;
 	const scheduledDelays: number[] = [];
+	let completedRetries = 0;
 
 	globalThis.setTimeout = ((handler, delayMs, ...arguments_) => {
 		if (typeof delayMs === 'number') {
 			scheduledDelays.push(delayMs);
+		}
+
+		if (typeof delayMs === 'number' && fastRetryDelays?.includes(delayMs)) {
+			return originalSetTimeout(() => {
+				completedRetries++;
+				handler(...arguments_);
+			}, 0);
 		}
 
 		const testDelayMs = typeof delayMs === 'number' && delayMs > 1_000_000 ? 0 : delayMs;
@@ -157,7 +168,7 @@ const withCapturedTimeouts = async (body: (scheduledDelays: number[]) => Promise
 	}) as typeof globalThis.setTimeout;
 
 	try {
-		await body(scheduledDelays);
+		await body(scheduledDelays, () => completedRetries);
 	} finally {
 		globalThis.setTimeout = originalSetTimeout;
 	}
@@ -371,34 +382,26 @@ test('QUERY retries by default', async t => {
 	t.deepEqual(receivedBodies, [json, json, json]);
 });
 
-test('respect Retry-After: 0 and retry immediately', async t => {
-	const retryCount = 4;
+test.serial('respect Retry-After: 0 and retry immediately', async t => {
 	let requestCount = 0;
+	const expectedDelays = [0, 0, 0, 0];
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		requestCount++;
+	await withCapturedTimeouts(async (scheduledDelays, completedRetries) => {
+		const result = await ky('https://example.com', {
+			timeout: false,
+			async fetch() {
+				requestCount++;
+				t.is(requestCount, completedRetries() + 1);
+				return requestCount === 5
+					? new Response(fixture)
+					: new Response('error', {status: 413, headers: {'Retry-After': '0'}});
+			},
+			retry: 4,
+		}).text();
 
-		if (requestCount === retryCount + 1) {
-			response.end(fixture);
-		} else {
-			response.writeHead(413, {
-				'Retry-After': 0,
-			});
-
-			response.end('');
-		}
-	});
-
-	await withPerformance({
-		t,
-		expectedDuration: 4 + 4 + 4 + 4,
-		async test() {
-			t.is(await ky(server.url, {
-				retry: retryCount,
-			}).text(), fixture);
-		},
-	});
+		t.is(result, fixture);
+		t.deepEqual(scheduledDelays.filter(delayMs => expectedDelays.includes(delayMs)), expectedDelays);
+	}, {fastRetryDelays: expectedDelays});
 
 	t.is(requestCount, 5);
 });
@@ -702,32 +705,25 @@ test.serial('invalid Retry-After HTTP-date components fall back to retry delay',
 	t.is(retryServer.requestCount, 2);
 });
 
-test('RateLimit-Reset delay seconds are respected like Retry-After', async t => {
+test.serial('RateLimit-Reset delay seconds are respected like Retry-After', async t => {
 	let requestCount = 0;
+	const expectedDelays = [1000, 1000];
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		requestCount++;
+	await withCapturedTimeouts(async (scheduledDelays, completedRetries) => {
+		const result = await ky('https://example.com', {
+			timeout: false,
+			async fetch() {
+				requestCount++;
+				t.is(requestCount, completedRetries() + 1);
+				return requestCount === 3
+					? new Response(fixture)
+					: new Response('error', {status: 429, headers: {[requestCount === 1 ? 'RateLimit-Reset' : 'Retry-After']: '1'}});
+			},
+		}).text();
 
-		if (requestCount === defaultRetryCount + 1) {
-			response.end(fixture);
-		} else {
-			const header = (requestCount < 2) ? 'RateLimit-Reset' : 'Retry-After';
-			response.writeHead(429, {
-				[header]: 1,
-			});
-
-			response.end('');
-		}
-	});
-
-	await withPerformance({
-		t,
-		expectedDuration: 1000 + 1000,
-		async test() {
-			t.is(await ky(server.url).text(), fixture);
-		},
-	});
+		t.is(result, fixture);
+		t.deepEqual(scheduledDelays.filter(delayMs => expectedDelays.includes(delayMs)), expectedDelays);
+	}, {fastRetryDelays: expectedDelays});
 
 	t.is(requestCount, 3);
 });
@@ -2245,107 +2241,84 @@ test.serial('respect maximum backoffLimit', async t => {
 	t.is(requestCount, 5);
 });
 
-test('backoffLimit: undefined treats as no limit (Infinity)', async t => {
-	const retryCount = 4;
+test.serial('backoffLimit: undefined treats as no limit (Infinity)', async t => {
 	let requestCount = 0;
+	const expectedDelays = [300, 600, 1200, 2400];
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		requestCount++;
+	await withCapturedTimeouts(async (scheduledDelays, completedRetries) => {
+		const result = await ky('https://example.com', {
+			timeout: false,
+			async fetch() {
+				requestCount++;
+				t.is(requestCount, completedRetries() + 1);
+				return requestCount === 5
+					? new Response(fixture)
+					: new Response('error', {status: 500});
+			},
+			retry: {limit: 4, backoffLimit: undefined},
+		}).text();
 
-		if (requestCount === retryCount + 1) {
-			response.end(fixture);
-		} else {
-			response.sendStatus(500);
-		}
-	});
-
-	// When backoffLimit is undefined, it should behave the same as no limit
-	// (i.e., delays should not be clamped, same as default behavior)
-	await withPerformance({
-		t,
-		expectedDuration: 300 + 600 + 1200 + 2400,
-		async test() {
-			t.is(await ky(server.url, {
-				retry: {
-					limit: retryCount,
-					backoffLimit: undefined,
-				},
-			}).text(), fixture);
-		},
-	});
+		t.is(result, fixture);
+		t.deepEqual(scheduledDelays.filter(delayMs => expectedDelays.includes(delayMs)), expectedDelays);
+	}, {fastRetryDelays: expectedDelays});
 
 	t.is(requestCount, 5);
 });
 
-test('respect custom retry.delay', async t => {
-	const retryCount = 4;
+test.serial('respect custom retry.delay', async t => {
 	let requestCount = 0;
+	const expectedDelays = [200, 300, 400, 500];
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		requestCount++;
+	await withCapturedTimeouts(async (scheduledDelays, completedRetries) => {
+		const result = await ky('https://example.com', {
+			timeout: false,
+			async fetch() {
+				requestCount++;
+				t.is(requestCount, completedRetries() + 1);
+				return requestCount === 5
+					? new Response(fixture)
+					: new Response('error', {status: 500});
+			},
+			retry: {limit: 4, delay: attempt => 100 * (attempt + 1)},
+		}).text();
 
-		if (requestCount === retryCount + 1) {
-			response.end(fixture);
-		} else {
-			response.sendStatus(500);
-		}
-	});
-
-	await withPerformance({
-		t,
-		expectedDuration: 200 + 300 + 400 + 500,
-		async test() {
-			t.is(await ky(server.url, {
-				retry: {
-					limit: retryCount,
-					delay: n => 100 * (n + 1),
-				},
-			}).text(), fixture);
-		},
-	});
+		t.is(result, fixture);
+		t.deepEqual(scheduledDelays.filter(delayMs => expectedDelays.includes(delayMs)), expectedDelays);
+	}, {fastRetryDelays: expectedDelays});
 
 	t.is(requestCount, 5);
 });
 
-test('jitter: true applies full jitter to delay', async t => {
-	const retryCount = 3;
+test.serial('jitter: true applies full jitter to delay', async t => {
 	let requestCount = 0;
-	const delays: number[] = [];
-	let lastTime = Date.now();
+	const originalRandom = Math.random;
+	Math.random = () => 0.5;
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		const now = Date.now();
-		if (requestCount > 0) {
-			delays.push(now - lastTime);
-		}
+	try {
+		await withCapturedTimeouts(async scheduledDelays => {
+			const result = await ky('https://example.com', {
+				timeout: false,
+				async fetch() {
+					requestCount++;
+					return requestCount === 4
+						? new Response(fixture)
+						: new Response('error', {status: 500});
+				},
+				retry: {
+					limit: 3,
+					jitter: true,
+				},
+			}).text();
 
-		lastTime = now;
-		requestCount++;
-
-		if (requestCount === retryCount + 1) {
-			response.end(fixture);
-		} else {
-			response.sendStatus(500);
-		}
-	});
-
-	await ky(server.url, {
-		retry: {
-			limit: retryCount,
-			jitter: true,
-		},
-	}).text();
+			t.is(result, fixture);
+			// HTTPError body reads schedule a separate 10-second deadline.
+			t.deepEqual(scheduledDelays.filter(delayMs => delayMs !== 10_000), [150, 300, 600]);
+		});
+	} finally {
+		Math.random = originalRandom;
+	}
 
 	t.is(requestCount, 4);
-
-	// Full jitter should produce delays between 0 and the computed delay
-	// Add 50% tolerance for system overhead and CI variability
-	t.true(delays[0] >= 0 && delays[0] <= 450);
-	t.true(delays[1] >= 0 && delays[1] <= 900);
-	t.true(delays[2] >= 0 && delays[2] <= 1800);
 });
 
 test('jitter: custom function applies custom jitter', async t => {
@@ -2385,46 +2358,37 @@ test('jitter: custom function applies custom jitter', async t => {
 	t.is(jitterCalls[2], 1200); // Third retry
 });
 
-test('jitter respects backoffLimit', async t => {
-	const retryCount = 3;
+test.serial('jitter respects backoffLimit', async t => {
 	let requestCount = 0;
-	const delays: number[] = [];
-	let lastTime = Date.now();
+	const originalRandom = Math.random;
+	Math.random = () => 0.75;
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		const now = Date.now();
-		if (requestCount > 0) {
-			delays.push(now - lastTime);
-		}
+	try {
+		await withCapturedTimeouts(async scheduledDelays => {
+			const result = await ky('https://example.com', {
+				timeout: false,
+				async fetch() {
+					requestCount++;
+					return requestCount === 4
+						? new Response(fixture)
+						: new Response('error', {status: 500});
+				},
+				retry: {
+					limit: 3,
+					backoffLimit: 500,
+					jitter: true,
+				},
+			}).text();
 
-		lastTime = now;
-		requestCount++;
-
-		if (requestCount === retryCount + 1) {
-			response.end(fixture);
-		} else {
-			response.sendStatus(500);
-		}
-	});
-
-	await ky(server.url, {
-		retry: {
-			limit: retryCount,
-			backoffLimit: 500,
-			jitter: true,
-		},
-	}).text();
+			t.is(result, fixture);
+			// HTTPError body reads schedule a separate 10-second deadline.
+			t.deepEqual(scheduledDelays.filter(delayMs => delayMs !== 10_000), [225, 450, 500]);
+		});
+	} finally {
+		Math.random = originalRandom;
+	}
 
 	t.is(requestCount, 4);
-
-	// With backoffLimit of 500, all delays should be <= 500ms
-	// Even though the computed delays would be 300, 600, 1200
-	// After jitter and backoffLimit, they should all be <= 500
-	// Add 50% tolerance for system overhead and CI variability
-	t.true(delays[0] >= 0 && delays[0] <= 750);
-	t.true(delays[1] >= 0 && delays[1] <= 750);
-	t.true(delays[2] >= 0 && delays[2] <= 750);
 });
 
 test('jitter works with custom delay function', async t => {
@@ -2868,7 +2832,7 @@ test('each retry gets the full per-attempt timeout (not a shared budget)', async
 	t.is(requestCount, 2);
 });
 
-test('Retry-After delay is bounded by totalTimeout budget', async t => {
+test.serial('Retry-After delay is bounded by totalTimeout budget', async t => {
 	let requestCount = 0;
 	const server = await createHttpTestServer(t);
 	server.get('/', (_request, response) => {
