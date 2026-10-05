@@ -53,7 +53,7 @@ export const replaceOption = <T>(value: T): T => {
 
 export const validateAndMerge = (...sources: Array<Partial<Options> | undefined>): Partial<Options> => {
 	for (const source of sources) {
-		if ((!isObject(source) || Array.isArray(source)) && source !== undefined) {
+		if (!isObject(source) && source !== undefined) {
 			throw new TypeError('The `options` argument must be an object');
 		}
 	}
