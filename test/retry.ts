@@ -2378,46 +2378,37 @@ test('jitter: custom function applies custom jitter', async t => {
 	t.is(jitterCalls[2], 1200); // Third retry
 });
 
-test('jitter respects backoffLimit', async t => {
-	const retryCount = 3;
+test.serial('jitter respects backoffLimit', async t => {
 	let requestCount = 0;
-	const delays: number[] = [];
-	let lastTime = Date.now();
+	const originalRandom = Math.random;
+	Math.random = () => 0.75;
 
-	const server = await createHttpTestServer(t);
-	server.get('/', (_request, response) => {
-		const now = Date.now();
-		if (requestCount > 0) {
-			delays.push(now - lastTime);
-		}
+	try {
+		await withCapturedTimeouts(async scheduledDelays => {
+			const result = await ky('https://example.com', {
+				timeout: false,
+				async fetch() {
+					requestCount++;
+					return requestCount === 4
+						? new Response(fixture)
+						: new Response('error', {status: 500});
+				},
+				retry: {
+					limit: 3,
+					backoffLimit: 500,
+					jitter: true,
+				},
+			}).text();
 
-		lastTime = now;
-		requestCount++;
-
-		if (requestCount === retryCount + 1) {
-			response.end(fixture);
-		} else {
-			response.sendStatus(500);
-		}
-	});
-
-	await ky(server.url, {
-		retry: {
-			limit: retryCount,
-			backoffLimit: 500,
-			jitter: true,
-		},
-	}).text();
+			t.is(result, fixture);
+			// HTTPError body reads schedule a separate 10-second deadline.
+			t.deepEqual(scheduledDelays.filter(delayMs => delayMs !== 10_000), [225, 450, 500]);
+		});
+	} finally {
+		Math.random = originalRandom;
+	}
 
 	t.is(requestCount, 4);
-
-	// With backoffLimit of 500, all delays should be <= 500ms
-	// Even though the computed delays would be 300, 600, 1200
-	// After jitter and backoffLimit, they should all be <= 500
-	// Add 50% tolerance for system overhead and CI variability
-	t.true(delays[0] >= 0 && delays[0] <= 750);
-	t.true(delays[1] >= 0 && delays[1] <= 750);
-	t.true(delays[2] >= 0 && delays[2] <= 750);
 });
 
 test('jitter works with custom delay function', async t => {
