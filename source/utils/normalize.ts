@@ -42,7 +42,7 @@ const normalizeRetryLimit = (retryLimit: unknown): number => {
 		return defaultRetryOptions.limit;
 	}
 
-	if (typeof retryLimit !== 'number' || !Number.isFinite(retryLimit) || retryLimit < 0) {
+	if (typeof retryLimit !== 'number' || !Number.isInteger(retryLimit) || retryLimit < 0) {
 		throw new TypeError(invalidRetryLimitErrorMessage);
 	}
 
