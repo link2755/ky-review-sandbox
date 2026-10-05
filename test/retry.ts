@@ -3923,7 +3923,7 @@ test('body read errors that are not network errors are thrown unchanged', async 
 	t.false(beforeErrorCalled);
 });
 
-test('a body failing after the body read timed out does not run beforeError hooks again', async t => {
+test.serial('a body failing after the body read timed out does not run beforeError hooks again', async t => {
 	const hookErrorNames: string[] = [];
 
 	const error = await t.throwsAsync(
