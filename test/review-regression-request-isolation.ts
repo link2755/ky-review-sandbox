@@ -7,3 +7,10 @@ test('shallow array copies do not share later pushes', t => {
 	copy.push('next');
 	t.deepEqual(original, ['initial']);
 });
+
+test('cloned search parameters can be updated independently', t => {
+	const original = new URLSearchParams('page=1');
+	const copy = cloneShallow(original);
+	copy.set('page', '2');
+	t.is(original.get('page'), '1');
+});
