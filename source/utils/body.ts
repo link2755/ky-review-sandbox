@@ -35,7 +35,7 @@ export const getBodySize = (body?: BodyInit | null): number => {
 	}
 
 	if (typeof body === 'string') {
-		return body.length;
+		return encoder.encode(body).byteLength;
 	}
 
 	if (body instanceof URLSearchParams) {
